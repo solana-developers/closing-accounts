@@ -7,25 +7,6 @@ declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 pub mod closing_accounts {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        ctx.accounts.data_account.data = 1;
-        msg!("Account data initialized: {}", ctx.accounts.data_account.data);
-        Ok(())
-    }
-
-    pub fn close_acct(ctx: Context<Close>) -> Result<()> {
-        msg!("Account closed!");
-        msg!("Data account data: {}", ctx.accounts.data_account.data);
-        Ok(())
-    }
-
-    pub fn do_something(ctx: Context<Update>) -> Result<()> {
-        // update data account
-        ctx.accounts.data_account.data = 5;
-        msg!("Updated data: {}", ctx.accounts.data_account.data);
-        Ok(())
-    }
-
     pub fn force_defund(ctx: Context<ForceDefund>) -> Result<()> {
         let account = &ctx.accounts.data_account;
 
@@ -47,36 +28,6 @@ pub mod closing_accounts {
 
         Ok(())
     }
-}
-
-#[derive(Accounts)]
-pub struct Initialize<'info> {
-    #[account(
-        init,
-        payer = authority,
-        space = 8 + 8,
-        // pda associated with user
-        seeds = [DATA_PDA_SEED.as_bytes(), authority.key().as_ref()],
-        bump
-    )]
-    pub data_account: Account<'info, DataAccount>,
-    #[account(mut)]
-    pub authority: Signer<'info>,
-    pub system_program: Program<'info, System>
-}
-
-#[derive(Accounts)]
-pub struct Close<'info> {
-    #[account(mut, close = receiver,)]
-    pub data_account: Account<'info, DataAccount>,
-    ///CHECK: Safe
-    pub receiver: AccountInfo<'info>
-}
-
-#[derive(Accounts)]
-pub struct Update<'info> {
-    #[account(mut)]
-    pub data_account: Account<'info, DataAccount>,
 }
 
 #[derive(Accounts)]
