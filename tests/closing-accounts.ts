@@ -2,7 +2,7 @@ import * as anchor from "@project-serum/anchor"
 import { Program } from "@project-serum/anchor"
 import { ClosingAccounts } from "../target/types/closing_accounts"
 import { PublicKey, Keypair, SystemProgram, Transaction } from '@solana/web3.js'
-import { getOrCreateAssociatedTokenAccount, createMint, TOKEN_PROGRAM_ID } from "@solana/spl-token"
+import { getOrCreateAssociatedTokenAccount, createMint, TOKEN_PROGRAM_ID, getAccount } from "@solana/spl-token"
 import { safeAirdrop } from "./utils/utils"
 import { expect } from 'chai'
 import { associated } from "@project-serum/anchor/dist/cjs/utils/pubkey"
@@ -68,10 +68,18 @@ describe("closing-accounts", () => {
       program.programId
     )
 
+    // log rewards minted
+    let tokenAcct = await getAccount(
+      provider.connection,
+      userAta
+    )
+    console.log("User balance before reward redemption: ", tokenAcct.amount.toString())
+
     const tx = new Transaction()
 
     // instruction claims rewards, program will try to close account
-    const ix1 = await program.methods.redeemWinningsInsecure()
+    tx.add(
+      await program.methods.redeemWinningsInsecure()
       .accounts({
         lotteryEntry: lotteryEntry,
         user: authority.publicKey,
@@ -81,8 +89,7 @@ describe("closing-accounts", () => {
         tokenProgram: TOKEN_PROGRAM_ID
       })
       .instruction()
-      // add ix to tx
-      tx.add(ix1)
+    )
 
     // user adds instruction to refund dataAccount lamports
     const rentExemptLamports = await provider.connection.getMinimumBalanceForRentExemption(82, "confirmed")
@@ -97,6 +104,13 @@ describe("closing-accounts", () => {
     const txSig = await provider.connection.sendTransaction(tx, [authority])
     await provider.connection.confirmTransaction(txSig)
 
+    // log rewards minted
+    tokenAcct = await getAccount(
+      provider.connection,
+      userAta
+    )
+    console.log("User balance after first redemption: ", tokenAcct.amount.toString())
+
     // claim rewards for a 2nd time
     await program.methods.redeemWinningsInsecure()
       .accounts({
@@ -109,5 +123,14 @@ describe("closing-accounts", () => {
       })
       .signers([authority])
       .rpc()
+
+    tokenAcct = await getAccount(
+      provider.connection,
+      userAta
+    )
+
+    // log rewards minted
+    console.log("User balance after second redemption: ", tokenAcct.amount.toString())
+
   })
 })

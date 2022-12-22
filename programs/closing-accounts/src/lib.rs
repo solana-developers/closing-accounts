@@ -27,7 +27,7 @@ pub mod closing_accounts {
         msg!("Calculating winnings");
         let amount = ctx.accounts.lottery_entry.timestamp as u64 * 10;
 
-        msg!("Mint rewards");
+        msg!("Minting {} tokens in rewards", amount);
          // program signer seeds
         let auth_bump = *ctx.bumps.get("mint_auth").unwrap();
         let auth_seeds = &[MINT_SEED.as_bytes(), &[auth_bump]];
