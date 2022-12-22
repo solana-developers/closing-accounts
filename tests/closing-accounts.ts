@@ -111,18 +111,23 @@ describe("closing-accounts", () => {
     )
     console.log("User balance after first redemption: ", tokenAcct.amount.toString())
 
-    // claim rewards for a 2nd time
-    await program.methods.redeemWinningsInsecure()
-      .accounts({
-        lotteryEntry: lotteryEntry,
-        user: authority.publicKey,
-        userAta: userAta,
-        rewardMint: rewardMint,
-        mintAuth: mintAuth,
-        tokenProgram: TOKEN_PROGRAM_ID
-      })
-      .signers([authority])
-      .rpc()
+    try {
+      // claim rewards for a 2nd time
+      await program.methods.redeemWinningsInsecure()
+        .accounts({
+          lotteryEntry: lotteryEntry,
+          user: authority.publicKey,
+          userAta: userAta,
+          rewardMint: rewardMint,
+          mintAuth: mintAuth,
+          tokenProgram: TOKEN_PROGRAM_ID
+        })
+        .signers([authority])
+        .rpc()
+    } catch (e) {
+      console.log(e.message)
+      expect(e.message).to.eq("AnchorError caused by account: lottery_entry. Error Code: AccountDiscriminatorMismatch. Error Number: 3002. Error Message: 8 byte discriminator did not match what was expected.")
+    }
 
     tokenAcct = await getAccount(
       provider.connection,
