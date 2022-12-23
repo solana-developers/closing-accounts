@@ -1,9 +1,9 @@
-use anchor_lang::prelude::*;
 use anchor_lang::__private::CLOSED_ACCOUNT_DISCRIMINATOR;
-use anchor_spl::{token::{TokenAccount, MintTo, Token, Mint, mint_to}};
+use anchor_lang::prelude::*;
+use anchor_spl::token::{mint_to, Mint, MintTo, Token, TokenAccount};
 use std::ops::DerefMut;
 
-declare_id!("3v46VFd9BqVmnEK8TkT3iYVJPJpXget3jg4hMA1FbgZp");
+declare_id!("HDY88ynpunYnb4fPxjeExMUjJGvRXFEoMTrJXvdj1q21");
 
 #[program]
 pub mod closing_accounts {
@@ -23,12 +23,11 @@ pub mod closing_accounts {
     }
 
     pub fn redeem_winnings_insecure(ctx: Context<RedeemWinnings>) -> Result<()> {
-
         msg!("Calculating winnings");
         let amount = ctx.accounts.lottery_entry.timestamp as u64 * 10;
 
         msg!("Minting {} tokens in rewards", amount);
-         // program signer seeds
+        // program signer seeds
         let auth_bump = *ctx.bumps.get("mint_auth").unwrap();
         let auth_seeds = &[MINT_SEED.as_bytes(), &[auth_bump]];
         let signer = &[&auth_seeds[..]];
@@ -83,7 +82,7 @@ pub mod closing_accounts {
 pub struct EnterLottery<'info> {
     #[account(
         init,
-        seeds = [DATA_PDA_SEED.as_bytes(), user.key().as_ref()],
+        seeds = [user.key().as_ref()],
         bump,
         payer = user,
         space = 8 + 1 + 32 + 1 + 8 + 32
@@ -92,7 +91,7 @@ pub struct EnterLottery<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     pub user_ata: Account<'info, TokenAccount>,
-    pub system_program: Program<'info, System>
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -100,7 +99,7 @@ pub struct RedeemWinnings<'info> {
     // program expects this account to be initialized
     #[account(
         mut,
-        seeds = [DATA_PDA_SEED.as_bytes(), user.key().as_ref()],
+        seeds = [user.key().as_ref()],
         bump = lottery_entry.bump,
         has_one = user
     )]
@@ -123,7 +122,7 @@ pub struct RedeemWinnings<'info> {
         bump
     )]
     pub mint_auth: AccountInfo<'info>,
-    pub token_program: Program<'info, Token>
+    pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
@@ -142,19 +141,18 @@ pub struct LotteryAccount {
     user: Pubkey,
     bump: u8,
     timestamp: i64,
-    user_ata: Pubkey
+    user_ata: Pubkey,
 }
 
-pub const DATA_PDA_SEED: &str = "test-seed";
 pub const MINT_SEED: &str = "mint-seed";
 
-impl<'info> RedeemWinnings <'info> {
+impl<'info> RedeemWinnings<'info> {
     pub fn mint_ctx(&self) -> CpiContext<'_, '_, '_, 'info, MintTo<'info>> {
         let cpi_program = self.token_program.to_account_info();
         let cpi_accounts = MintTo {
             mint: self.reward_mint.to_account_info(),
             to: self.user_ata.to_account_info(),
-            authority: self.mint_auth.to_account_info()
+            authority: self.mint_auth.to_account_info(),
         };
 
         CpiContext::new(cpi_program, cpi_accounts)
@@ -164,5 +162,5 @@ impl<'info> RedeemWinnings <'info> {
 #[error_code]
 pub enum MyError {
     #[msg("Expected closed account discriminator")]
-    InvalidDiscriminator
+    InvalidDiscriminator,
 }
