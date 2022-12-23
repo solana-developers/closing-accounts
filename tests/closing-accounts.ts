@@ -74,7 +74,7 @@ describe("closing-accounts", () => {
       .rpc()
   })
 
-  it("attacker  can close + refund lottery acct + claim multiple rewards", async () => {
+  it("attacker can close + refund lottery acct + claim multiple rewards", async () => {
     // claim multiple times
     for (let i = 0; i < 2; i++) {
       const tx = new Transaction()
@@ -119,5 +119,57 @@ describe("closing-accounts", () => {
     expect(Number(ata.amount)).to.equal(
       lotteryEntry.timestamp.toNumber() * 10 * 2
     )
+  })
+
+  it("attacker cannot claim multiple rewards with secure claim", async () => {
+    const tx = new Transaction()
+    // instruction claims rewards, program will try to close account
+    tx.add(
+      await program.methods
+        .redeemWinningsSecure()
+        .accounts({
+          lotteryEntry: attackerLotteryEntry,
+          user: attacker.publicKey,
+          userAta: attackerAta,
+          rewardMint: rewardMint,
+          mintAuth: mintAuth,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .instruction()
+    )
+
+    // user adds instruction to refund dataAccount lamports
+    const rentExemptLamports =
+      await provider.connection.getMinimumBalanceForRentExemption(
+        82,
+        "confirmed"
+      )
+    tx.add(
+      SystemProgram.transfer({
+        fromPubkey: attacker.publicKey,
+        toPubkey: attackerLotteryEntry,
+        lamports: rentExemptLamports,
+      })
+    )
+    // send tx
+    await sendAndConfirmTransaction(provider.connection, tx, [attacker])
+
+    try {
+      await program.methods
+        .redeemWinningsSecure()
+        .accounts({
+          lotteryEntry: attackerLotteryEntry,
+          user: attacker.publicKey,
+          userAta: attackerAta,
+          rewardMint: rewardMint,
+          mintAuth: mintAuth,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([attacker])
+        .rpc()
+    } catch (error) {
+      console.log(error.message)
+      expect(error)
+    }
   })
 })

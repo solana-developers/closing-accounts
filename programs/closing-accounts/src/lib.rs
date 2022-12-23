@@ -55,6 +55,22 @@ pub mod closing_accounts {
         Ok(())
     }
 
+    pub fn redeem_winnings_secure(ctx: Context<RedeemWinningsSecure>) -> Result<()> {
+        msg!("Calculating winnings");
+        let amount = ctx.accounts.lottery_entry.timestamp as u64 * 10;
+
+        msg!("Minting {} tokens in rewards", amount);
+        // program signer seeds
+        let auth_bump = *ctx.bumps.get("mint_auth").unwrap();
+        let auth_seeds = &[MINT_SEED.as_bytes(), &[auth_bump]];
+        let signer = &[&auth_seeds[..]];
+
+        // redeem rewards by minting to user
+        mint_to(ctx.accounts.mint_ctx().with_signer(signer), amount)?;
+
+        Ok(())
+    }
+
     pub fn force_defund(ctx: Context<ForceDefund>) -> Result<()> {
         let account = &ctx.accounts.data_account;
 
@@ -123,6 +139,51 @@ pub struct RedeemWinnings<'info> {
     )]
     pub mint_auth: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct RedeemWinningsSecure<'info> {
+    // program expects this account to be initialized
+    #[account(
+        mut,
+        seeds = [user.key().as_ref()],
+        bump = lottery_entry.bump,
+        has_one = user,
+        close = user
+    )]
+    pub lottery_entry: Account<'info, LotteryAccount>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        mut,
+        constraint = user_ata.key() == lottery_entry.user_ata
+    )]
+    pub user_ata: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = reward_mint.key() == user_ata.mint
+    )]
+    pub reward_mint: Account<'info, Mint>,
+    ///CHECK: mint authority
+    #[account(
+        seeds = [MINT_SEED.as_bytes()],
+        bump
+    )]
+    pub mint_auth: AccountInfo<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
+impl<'info> RedeemWinningsSecure<'info> {
+    pub fn mint_ctx(&self) -> CpiContext<'_, '_, '_, 'info, MintTo<'info>> {
+        let cpi_program = self.token_program.to_account_info();
+        let cpi_accounts = MintTo {
+            mint: self.reward_mint.to_account_info(),
+            to: self.user_ata.to_account_info(),
+            authority: self.mint_auth.to_account_info(),
+        };
+
+        CpiContext::new(cpi_program, cpi_accounts)
+    }
 }
 
 #[derive(Accounts)]
