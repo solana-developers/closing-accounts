@@ -10,9 +10,6 @@ pub const MINT_SEED: &str = "mint-seed";
 
 #[program]
 pub mod closing_accounts {
-
-    use anchor_lang::solana_program::system_program;
-
     use super::*;
 
     pub fn enter_lottery(ctx: Context<EnterLottery>) -> Result<()> {

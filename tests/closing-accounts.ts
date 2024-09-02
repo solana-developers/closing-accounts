@@ -121,7 +121,7 @@ describe("closing-accounts", () => {
     // instruction claims rewards, program will try to close account
     tx.add(
       await program.methods
-        .redeemWinningsSecure2()
+        .redeemWinningsSecure()
         .accounts({
           user: attacker.publicKey,
           userAta: attackerAta,
@@ -148,7 +148,7 @@ describe("closing-accounts", () => {
 
     try {
       await program.methods
-        .redeemWinningsSecure2()
+        .redeemWinningsSecure()
         .accounts({
           user: attacker.publicKey,
           userAta: attackerAta,
