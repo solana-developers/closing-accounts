@@ -1,9 +1,12 @@
-use anchor_lang::__private::CLOSED_ACCOUNT_DISCRIMINATOR;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{mint_to, Mint, MintTo, Token, TokenAccount};
 use std::ops::DerefMut;
 
-declare_id!("HDY88ynpunYnb4fPxjeExMUjJGvRXFEoMTrJXvdj1q21");
+declare_id!("FqETzdh6PsE7aNjrdapuoyFeYGdjPKN8AgG2ZUghje8A");
+
+const DISCRIMINATOR_SIZE: usize = 8;
+pub const DATA_PDA_SEED: &str = "test-seed";
+pub const MINT_SEED: &str = "mint-seed";
 
 #[program]
 pub mod closing_accounts {
@@ -11,11 +14,10 @@ pub mod closing_accounts {
 
     pub fn enter_lottery(ctx: Context<EnterLottery>) -> Result<()> {
         msg!("Initializing lottery entry...");
-
         ctx.accounts.lottery_entry.timestamp = Clock::get().unwrap().unix_timestamp;
         ctx.accounts.lottery_entry.user = ctx.accounts.user.key();
         ctx.accounts.lottery_entry.user_ata = ctx.accounts.user_ata.key();
-        ctx.accounts.lottery_entry.bump = *ctx.bumps.get("lottery_entry").unwrap();
+        ctx.accounts.lottery_entry.bump = ctx.bumps.lottery_entry;
 
         msg!("Entry initialized!");
 
@@ -24,11 +26,12 @@ pub mod closing_accounts {
 
     pub fn redeem_winnings_insecure(ctx: Context<RedeemWinnings>) -> Result<()> {
         msg!("Calculating winnings");
+
         let amount = ctx.accounts.lottery_entry.timestamp as u64 * 10;
 
         msg!("Minting {} tokens in rewards", amount);
         // program signer seeds
-        let auth_bump = *ctx.bumps.get("mint_auth").unwrap();
+        let auth_bump = ctx.bumps.mint_auth;
         let auth_seeds = &[MINT_SEED.as_bytes(), &[auth_bump]];
         let signer = &[&auth_seeds[..]];
 
@@ -61,34 +64,12 @@ pub mod closing_accounts {
 
         msg!("Minting {} tokens in rewards", amount);
         // program signer seeds
-        let auth_bump = *ctx.bumps.get("mint_auth").unwrap();
+        let auth_bump = ctx.bumps.mint_auth;
         let auth_seeds = &[MINT_SEED.as_bytes(), &[auth_bump]];
         let signer = &[&auth_seeds[..]];
 
         // redeem rewards by minting to user
         mint_to(ctx.accounts.mint_ctx().with_signer(signer), amount)?;
-
-        Ok(())
-    }
-
-    pub fn force_defund(ctx: Context<ForceDefund>) -> Result<()> {
-        let account = &ctx.accounts.data_account;
-
-        let data = account.try_borrow_data()?;
-        assert!(data.len() > 8);
-
-        let mut discriminator = [0u8; 8];
-        discriminator.copy_from_slice(&data[0..8]);
-        if discriminator != CLOSED_ACCOUNT_DISCRIMINATOR {
-            return err!(MyError::InvalidDiscriminator);
-        }
-
-        let dest_starting_lamports = ctx.accounts.destination.lamports();
-
-        **ctx.accounts.destination.lamports.borrow_mut() = dest_starting_lamports
-            .checked_add(account.lamports())
-            .unwrap();
-        **account.lamports.borrow_mut() = 0;
 
         Ok(())
     }
@@ -98,15 +79,15 @@ pub mod closing_accounts {
 pub struct EnterLottery<'info> {
     #[account(
         init,
-        seeds = [user.key().as_ref()],
+        seeds = [DATA_PDA_SEED.as_bytes(),user.key.as_ref()],
         bump,
         payer = user,
-        space = 8 + 1 + 32 + 1 + 8 + 32
+        space = DISCRIMINATOR_SIZE + LotteryAccount::INIT_SPACE
     )]
     pub lottery_entry: Account<'info, LotteryAccount>,
+    pub user_ata: Account<'info, TokenAccount>,
     #[account(mut)]
     pub user: Signer<'info>,
-    pub user_ata: Account<'info, TokenAccount>,
     pub system_program: Program<'info, System>,
 }
 
@@ -115,9 +96,8 @@ pub struct RedeemWinnings<'info> {
     // program expects this account to be initialized
     #[account(
         mut,
-        seeds = [user.key().as_ref()],
-        bump = lottery_entry.bump,
-        has_one = user
+        seeds = [DATA_PDA_SEED.as_bytes(),user.key.as_ref()],
+        bump
     )]
     pub lottery_entry: Account<'info, LotteryAccount>,
     #[account(mut)]
@@ -146,9 +126,8 @@ pub struct RedeemWinningsSecure<'info> {
     // program expects this account to be initialized
     #[account(
         mut,
-        seeds = [user.key().as_ref()],
+        seeds = [DATA_PDA_SEED.as_bytes(),user.key.as_ref()],
         bump = lottery_entry.bump,
-        has_one = user,
         close = user
     )]
     pub lottery_entry: Account<'info, LotteryAccount>,
@@ -173,7 +152,17 @@ pub struct RedeemWinningsSecure<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-impl<'info> RedeemWinningsSecure<'info> {
+#[account]
+#[derive(InitSpace)]
+pub struct LotteryAccount {
+    is_initialized: bool,
+    user: Pubkey,
+    bump: u8,
+    timestamp: i64,
+    user_ata: Pubkey,
+}
+
+impl<'info> RedeemWinnings<'info> {
     pub fn mint_ctx(&self) -> CpiContext<'_, '_, '_, 'info, MintTo<'info>> {
         let cpi_program = self.token_program.to_account_info();
         let cpi_accounts = MintTo {
@@ -186,28 +175,7 @@ impl<'info> RedeemWinningsSecure<'info> {
     }
 }
 
-#[derive(Accounts)]
-pub struct ForceDefund<'info> {
-    ///CHECK: safe
-    #[account(mut)]
-    data_account: AccountInfo<'info>,
-    ///CHECK: safe
-    #[account(mut)]
-    destination: AccountInfo<'info>,
-}
-
-#[account]
-pub struct LotteryAccount {
-    is_initialized: bool,
-    user: Pubkey,
-    bump: u8,
-    timestamp: i64,
-    user_ata: Pubkey,
-}
-
-pub const MINT_SEED: &str = "mint-seed";
-
-impl<'info> RedeemWinnings<'info> {
+impl<'info> RedeemWinningsSecure<'info> {
     pub fn mint_ctx(&self) -> CpiContext<'_, '_, '_, 'info, MintTo<'info>> {
         let cpi_program = self.token_program.to_account_info();
         let cpi_accounts = MintTo {

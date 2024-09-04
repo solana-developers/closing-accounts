@@ -1,15 +1,18 @@
+[toolchain]
+
 [features]
-seeds = false
+resolution = true
 skip-lint = false
+
 [programs.localnet]
-closing_accounts = "HDY88ynpunYnb4fPxjeExMUjJGvRXFEoMTrJXvdj1q21"
+closing_accounts = "FqETzdh6PsE7aNjrdapuoyFeYGdjPKN8AgG2ZUghje8A"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "Localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/*.ts"
