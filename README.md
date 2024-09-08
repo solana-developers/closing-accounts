@@ -1,6 +1,6 @@
 # Closing Accounts
 
-This project demonstrates the vulnerabilities associated with using closing accounts in Solana programs. Example code from the closing accounts lesson from the Solana Program Security course.
+This project demonstrates the vulnerabilities associated with closing accounts in Solana programs. Example code from the closing accounts lesson from the Solana Program Security course.
 
 ## Prerequisites
 
