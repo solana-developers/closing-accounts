@@ -5,35 +5,38 @@ import {
   PublicKey,
   Keypair,
   SystemProgram,
-  Transaction,
-  sendAndConfirmTransaction,
+  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   getOrCreateAssociatedTokenAccount,
   createMint,
   getAccount,
 } from "@solana/spl-token";
-import { safeAirdrop } from "./utils/utils";
-import { assert, expect } from "chai";
+import { airdropIfRequired } from "@solana-developers/helpers";
+import { expect } from "chai";
 
-describe("closing-accounts", () => {
+describe("Closing accounts", () => {
   // Configure the client to use the local cluster.
-  anchor.setProvider(anchor.AnchorProvider.env());
   const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
   const program = anchor.workspace.ClosingAccounts as Program<ClosingAccounts>;
   const attacker = Keypair.generate();
-  let attackerAta: PublicKey = null;
-  let rewardMint: PublicKey = null;
-  let mintAuth: PublicKey = null;
+  let attackerAta: PublicKey;
+  let rewardMint: PublicKey;
+  let mintAuth: PublicKey;
 
-  it("Enter lottery should be successful", async () => {
-    const [mint, mintBump] = PublicKey.findProgramAddressSync(
+  before(async () => {
+    await airdropIfRequired(
+      provider.connection,
+      attacker.publicKey,
+      2 * LAMPORTS_PER_SOL,
+      1 * LAMPORTS_PER_SOL
+    );
+
+    [mintAuth] = PublicKey.findProgramAddressSync(
       [Buffer.from("mint-seed")],
       program.programId
     );
-    mintAuth = mint;
-
-    await safeAirdrop(attacker.publicKey, provider.connection);
 
     rewardMint = await createMint(
       provider.connection,
@@ -50,49 +53,101 @@ describe("closing-accounts", () => {
       attacker.publicKey
     );
     attackerAta = associatedAcct.address;
-
-    // tx to enter lottery
-    await program.methods
-      .enterLottery()
-      .accounts({
-        user: attacker.publicKey,
-        userAta: attackerAta,
-      })
-      .signers([attacker])
-      .rpc();
   });
 
-  const [attackerLotteryEntry, bump] = PublicKey.findProgramAddressSync(
-    [Buffer.from("test-seed"), attacker.publicKey.toBuffer()],
-    program.programId
-  );
+  it("enters lottery successfully", async () => {
+    try {
+      await program.methods
+        .enterLottery()
+        .accounts({
+          user: attacker.publicKey,
+          userAta: attackerAta,
+        })
+        .signers([attacker])
+        .rpc();
+    } catch (error) {
+      throw new Error(`Failed to enter lottery: ${error.message}`);
+    }
+  });
 
-  it("attacker can close + refund lottery acct + claim multiple rewards successfully", async () => {
-    // claim multiple times
-    for (let i = 0; i < 2; i++) {
-      let tokenAcct = await getAccount(provider.connection, attackerAta);
+  it("allows attacker to close + refund lottery account + claim multiple rewards", async () => {
+    try {
+      const [attackerLotteryEntry] = PublicKey.findProgramAddressSync(
+        [Buffer.from("test-seed"), attacker.publicKey.toBuffer()],
+        program.programId
+      );
 
-      const tx = new Transaction();
+      // Claim multiple times
+      for (let i = 0; i < 2; i++) {
+        const tx = new anchor.web3.Transaction();
 
-      // instruction claims rewards, program will try to close account
+        // Instruction claims rewards, program will try to close account
+        tx.add(
+          await program.methods
+            .redeemWinningsInsecure()
+            .accounts({
+              userAta: attackerAta,
+              rewardMint: rewardMint,
+              user: attacker.publicKey,
+            })
+            .signers([attacker])
+            .instruction()
+        );
+
+        // User adds instruction to refund dataAccount lamports
+        const rentExemptLamports =
+          await provider.connection.getMinimumBalanceForRentExemption(82);
+        tx.add(
+          SystemProgram.transfer({
+            fromPubkey: attacker.publicKey,
+            toPubkey: attackerLotteryEntry,
+            lamports: rentExemptLamports,
+          })
+        );
+
+        // Send transaction
+        await provider.sendAndConfirm(tx, [attacker]);
+
+        // Wait for 5 seconds
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+
+      const tokenAcct = await getAccount(provider.connection, attackerAta);
+      const lotteryEntry = await program.account.lotteryAccount.fetch(
+        attackerLotteryEntry
+      );
+
+      expect(Number(tokenAcct.amount)).to.equal(
+        lotteryEntry.timestamp.toNumber() * 10 * 2
+      );
+    } catch (error) {
+      throw new Error(`Test failed: ${error.message}`);
+    }
+  });
+
+  it("prevents attacker from claiming multiple rewards with secure claim", async () => {
+    try {
+      const [attackerLotteryEntry] = PublicKey.findProgramAddressSync(
+        [Buffer.from("test-seed"), attacker.publicKey.toBuffer()],
+        program.programId
+      );
+
+      // First claim
+      const tx = new anchor.web3.Transaction();
       tx.add(
         await program.methods
-          .redeemWinningsInsecure()
+          .redeemWinningsSecure()
           .accounts({
+            user: attacker.publicKey,
             userAta: attackerAta,
             rewardMint: rewardMint,
-            user: attacker.publicKey,
           })
-          .signers([attacker])
           .instruction()
       );
 
-      // user adds instruction to refund dataAccount lamports
+      // User adds instruction to refund dataAccount lamports
       const rentExemptLamports =
-        await provider.connection.getMinimumBalanceForRentExemption(
-          82,
-          "confirmed"
-        );
+        await provider.connection.getMinimumBalanceForRentExemption(82);
       tx.add(
         SystemProgram.transfer({
           fromPubkey: attacker.publicKey,
@@ -100,68 +155,30 @@ describe("closing-accounts", () => {
           lamports: rentExemptLamports,
         })
       );
-      // send tx
-      await sendAndConfirmTransaction(provider.connection, tx, [attacker]);
-      await new Promise((x) => setTimeout(x, 5000));
-    }
 
-    const tokenAcct = await getAccount(provider.connection, attackerAta);
+      // Send first transaction
+      await provider.sendAndConfirm(tx, [attacker]);
 
-    const lotteryEntry = await program.account.lotteryAccount.fetch(
-      attackerLotteryEntry
-    );
+      // Attempt second claim
+      try {
+        await program.methods
+          .redeemWinningsSecure()
+          .accounts({
+            user: attacker.publicKey,
+            userAta: attackerAta,
+            rewardMint: rewardMint,
+          })
+          .signers([attacker])
+          .rpc();
 
-    expect(Number(tokenAcct.amount)).to.equal(
-      lotteryEntry.timestamp.toNumber() * 10 * 2
-    );
-  });
-
-  it("attacker claiming multiple rewards with secure claim should throw an exception", async () => {
-    const tx = new Transaction();
-    // instruction claims rewards, program will try to close account
-    tx.add(
-      await program.methods
-        .redeemWinningsSecure()
-        .accounts({
-          user: attacker.publicKey,
-          userAta: attackerAta,
-          rewardMint: rewardMint,
-        })
-        .instruction()
-    );
-
-    // user adds instruction to refund dataAccount lamports
-    const rentExemptLamports =
-      await provider.connection.getMinimumBalanceForRentExemption(
-        82,
-        "confirmed"
-      );
-    tx.add(
-      SystemProgram.transfer({
-        fromPubkey: attacker.publicKey,
-        toPubkey: attackerLotteryEntry,
-        lamports: rentExemptLamports,
-      })
-    );
-    // send tx
-    await sendAndConfirmTransaction(provider.connection, tx, [attacker]);
-
-    try {
-      await program.methods
-        .redeemWinningsSecure()
-        .accounts({
-          user: attacker.publicKey,
-          userAta: attackerAta,
-          rewardMint: rewardMint,
-        })
-        .signers([attacker])
-        .rpc();
+        // If we reach here, the transaction didn't throw as expected
+        expect.fail("Expected an error but transaction succeeded");
+      } catch (error) {
+        console.log(error.message);
+        expect(error).to.exist;
+      }
     } catch (error) {
-      console.log(error.message);
-      expect(error);
-      return;
+      throw new Error(`Test failed: ${error.message}`);
     }
-
-    assert.fail("should throw an exception");
   });
 });
