@@ -77,7 +77,6 @@ pub struct EnterLottery<'info> {
 
 #[derive(Accounts)]
 pub struct RedeemWinnings<'info> {
-    // Verifying lottery entry PDA and closing it
     #[account(
         mut,
         seeds = [DATA_PDA_SEED, user.key().as_ref()],
