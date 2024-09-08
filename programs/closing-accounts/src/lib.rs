@@ -93,7 +93,6 @@ pub struct EnterLottery<'info> {
 
 #[derive(Accounts)]
 pub struct RedeemWinnings<'info> {
-    // Verifying lottery entry PDA and closing it
     #[account(
         mut,
         seeds = [DATA_PDA_SEED, user.key().as_ref()],
@@ -126,7 +125,7 @@ pub struct RedeemWinnings<'info> {
 
 #[derive(Accounts)]
 pub struct RedeemWinningsSecure<'info> {
-    // program expects this account to be initialized
+    // Verifying lottery entry PDA and closing it
     #[account(
         mut,
         seeds = [DATA_PDA_SEED,user.key.as_ref()],
@@ -146,12 +145,13 @@ pub struct RedeemWinningsSecure<'info> {
         constraint = reward_mint.key() == user_ata.mint
     )]
     pub reward_mint: Account<'info, Mint>,
-    ///CHECK: mint authority
+    /// CHECKED: Mint authority PDA, checked by seeds constraint
     #[account(
         seeds = [MINT_SEED],
         bump
     )]
-    pub mint_auth: AccountInfo<'info>,
+    /// CHECKED: This account will not be checked by anchor
+    pub mint_auth: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
 }
 
