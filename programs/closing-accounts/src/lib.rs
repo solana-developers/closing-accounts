@@ -93,6 +93,7 @@ pub struct EnterLottery<'info> {
 
 #[derive(Accounts)]
 pub struct RedeemWinnings<'info> {
+    // Program expects this account to be initialized
     #[account(
         mut,
         seeds = [DATA_PDA_SEED, user.key().as_ref()],
